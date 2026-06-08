@@ -1,91 +1,37 @@
-import tls from "tls";
-import { URL } from "url";
+import cron from "node-cron";
 import dotenv from "dotenv";
-import websites from "./websites.js";
-
+import getWebsites from "./utils/websites.js";
+import { getSSLCert } from "./utils/getSSLCert.js";
+import { createSSLTask } from "./utils/createSSLTask.js";
+import { removeStaleTask } from "./utils/removeStaleTask.js";
+import { createSupportTask } from "./utils/createSupportTask.js";
 dotenv.config();
 
-const getSSLCert = async (website) => {
-  const url = new URL(website);
+const DAYS = 37;
 
-  return new Promise((resolve, reject) => {
-    const socket = tls.connect(
-      url.port || 443,
-      url.hostname,
-      {
-        servername: url.hostname,
-        rejectUnauthorized: false,
-      },
-      () => {
-        const cert = socket.getPeerCertificate();
-        socket.end();
-        resolve(cert);
-      },
+const checkWebsites = async () => {
+  let websites;
+  try {
+    websites = await getWebsites();
+  } catch (err) {
+    console.log(
+      `❌ Could not load website list from Google Sheet: ${err.message}`,
     );
-
-    socket.on("error", reject);
-  });
-};
-
-const findOpenTask = async (name) => {
-  const res = await fetch(
-    `https://api.clickup.com/api/v2/list/${process.env.CLICKUP_LIST_ID}/task?archived=false&include_closed=false`,
-    {
-      headers: { Authorization: process.env.CLICKUP_TOKEN },
-    },
-  );
-
-  if (!res.ok) {
-    throw new Error(`ClickUp API ${res.status}: ${await res.text()}`);
-  }
-
-  const data = await res.json();
-  return data.tasks?.find((task) => task.name === name);
-};
-
-const createClickUpTask = async (website, daysLeft, expires) => {
-  const name = `⚠️ SSL expiring: ${website}`;
-
-  if (await findOpenTask(name)) {
-    console.log(`⏭️  Task already exists for ${website}, skipping`);
     return;
   }
 
-  const res = await fetch(
-    `https://api.clickup.com/api/v2/list/${process.env.CLICKUP_LIST_ID}/task`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: process.env.CLICKUP_TOKEN,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        name,
-        description: `SSL certificate will expire in ${Math.floor(
-          daysLeft,
-        )} days (on ${expires.toDateString()}).`,
-        due_date: expires.getTime(),
-        priority: 1, // 1 = Urgent
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    throw new Error(`ClickUp API ${res.status}: ${await res.text()}`);
-  }
-
-  console.log(`✅ ClickUp task created for ${website}`);
-};
-
-const checkWebsites = async () => {
   for (const website of new Set(websites)) {
     try {
       const cert = await getSSLCert(website);
       const expires = new Date(cert.valid_to);
       const now = new Date();
       const daysLeft = (expires - now) / (1000 * 60 * 60 * 24);
-      if (daysLeft < 40) {
-        await createClickUpTask(website, daysLeft, expires);
+
+      if (daysLeft <= DAYS) {
+        await createSSLTask(website, daysLeft, expires);
+        await createSupportTask(website);
+      } else {
+        await removeStaleTask(website);
       }
     } catch (err) {
       console.log(`❌ Failed for ${website}: ${err.message}`);
@@ -93,4 +39,15 @@ const checkWebsites = async () => {
   }
 };
 
-checkWebsites();
+// Run every day at 09:00 (Tbilisi time). Change the timezone if your
+cron.schedule(
+  "0 9 * * *",
+  () => {
+    console.log(` Running SSL check — ${new Date().toLocaleString()}`);
+    checkWebsites();
+  },
+  { timezone: "Asia/Tbilisi" },
+);
+
+console.log(" SSL checker scheduled: every day at 09:00 (Asia/Tbilisi)");
+// checkWebsites();
