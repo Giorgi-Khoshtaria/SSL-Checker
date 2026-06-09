@@ -5,9 +5,11 @@ import { getSSLCert } from "./utils/getSSLCert.js";
 import { createSSLTask } from "./utils/createSSLTask.js";
 import { removeStaleTask } from "./utils/removeStaleTask.js";
 import { createSupportTask } from "./utils/createSupportTask.js";
+import { createDownTask } from "./utils/createDownTask.js";
+import { getAssignee } from "./utils/getAssignee.js";
 dotenv.config();
 
-const DAYS = 37;
+const DAYS = process.env.DAY;
 
 const checkWebsites = async () => {
   let websites;
@@ -21,6 +23,13 @@ const checkWebsites = async () => {
   }
 
   for (const website of new Set(websites)) {
+    let assignees = [];
+    try {
+      assignees = await getAssignee(website);
+    } catch {
+      // Couldn't read assignees — fall back to none.
+    }
+
     try {
       const cert = await getSSLCert(website);
       const expires = new Date(cert.valid_to);
@@ -28,13 +37,26 @@ const checkWebsites = async () => {
       const daysLeft = (expires - now) / (1000 * 60 * 60 * 24);
 
       if (daysLeft <= DAYS) {
-        await createSSLTask(website, daysLeft, expires);
-        await createSupportTask(website);
+        await createSSLTask(website, daysLeft, expires, assignees);
+        await createSupportTask(website, assignees);
       } else {
-        await removeStaleTask(website);
+        // await removeStaleTask(website);
       }
     } catch (err) {
-      console.log(`❌ Failed for ${website}: ${err.message}`);
+      const offCodes = [
+        "ENOTFOUND",
+        "ECONNREFUSED",
+        "ETIMEDOUT",
+        "ECONNRESET",
+        "EHOSTUNREACH",
+        "ENETUNREACH",
+      ];
+      if (offCodes.includes(err.code)) {
+        console.log(`🔌 ${website} is off / unreachable (${err.code})`);
+        await createDownTask(website, err.code, assignees);
+      } else {
+        console.log(`❌ Failed for ${website}: ${err.message}`);
+      }
     }
   }
 };
@@ -50,4 +72,4 @@ cron.schedule(
 );
 
 console.log(" SSL checker scheduled: every day at 09:00 (Asia/Tbilisi)");
-// checkWebsites();
+checkWebsites();

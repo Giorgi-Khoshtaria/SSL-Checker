@@ -1,7 +1,15 @@
 import { findTask } from "./finedTask.js";
+import { syncAssignee } from "./syncAssignee.js";
 
-export const createSSLTask = async (website, daysLeft, expires) => {
-  if (await findTask(website)) {
+export const createSSLTask = async (
+  website,
+  daysLeft,
+  expires,
+  assignees = [],
+) => {
+  const existing = await findTask(website);
+  if (existing) {
+    await syncAssignee(existing, assignees);
     console.log(`⏭️  Task already exists for ${website}, skipping`);
     return;
   }
@@ -21,6 +29,7 @@ export const createSSLTask = async (website, daysLeft, expires) => {
         )} days (on ${expires.toDateString()}).`,
         due_date: expires.getTime(),
         priority: 1, // 1 = Urgent
+        ...(assignees.length ? { assignees } : {}),
       }),
     },
   );

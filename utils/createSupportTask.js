@@ -1,5 +1,6 @@
 import { findTask } from "./finedTask.js";
 import { checkSupport } from "./checkSupport.js";
+import { syncAssignee } from "./syncAssignee.js";
 
 const parseSheetDate = (value) => {
   const dayFirst = value.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
@@ -10,7 +11,7 @@ const parseSheetDate = (value) => {
   return new Date(value);
 };
 
-export const createSupportTask = async (website) => {
+export const createSupportTask = async (website, assignees = []) => {
   const support = await checkSupport(website);
   if (!support || !support.endDate) {
     console.log(` No support end date for ${website}, skipping support task`);
@@ -26,11 +27,13 @@ export const createSupportTask = async (website) => {
     return;
   }
 
-  const name = `(${serviceName}) expires for: ${website} `;
-  if (await findTask(website, { match: name })) {
-    console.log(
-      `Support task for ${serviceName} already exists for ${website}, skipping`,
-    );
+  const label = serviceName || "Support";
+
+  const name = `(${label}) expires for: ${website} `;
+  const existing = await findTask(website, { match: name });
+  if (existing) {
+    await syncAssignee(existing, assignees);
+    console.log(`(${label}) task already exists for ${website}, skipping`);
     return;
   }
   const res = await fetch(
@@ -43,9 +46,10 @@ export const createSupportTask = async (website) => {
       },
       body: JSON.stringify({
         name,
-        description: `${serviceName} expires on ${expires.toDateString()}. for ${website}`,
+        description: `${label} expires on ${expires.toDateString()}. for ${website}`,
         due_date: expires.getTime(),
         priority: 1,
+        ...(assignees.length ? { assignees } : {}),
       }),
     },
   );
@@ -53,5 +57,5 @@ export const createSupportTask = async (website) => {
     throw new Error(`ClickUp API ${res.status}: ${await res.text()}`);
   }
 
-  console.log(`✅ ClickUp support task created for ${website}`);
+  console.log(`✅ ClickUp ${label} task created for ${website}`);
 };
